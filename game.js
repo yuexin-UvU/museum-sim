@@ -1,9 +1,31 @@
+const GAME_CONFIG = {
+    storageKey: 'museum-sim-save-v2',
+    homeUnlockSavings: 100000,
+    leisureLimitPerQuarter: 2,
+    studyCourseCost: 5000,
+    degreeTuition: 50000,
+    programApplyMinSavings: 100000,
+    adminDiceSuccessThreshold: 3,
+    adminDiceMaxRolls: 10,
+    adminDiceIntervalMs: 100,
+    defaultAdminButtonText: '🎲 尝试甩锅 (Roll)',
+    homeRestEffects: { health: 20, mood: 25 }
+};
+
 const UTILS = {
     rand: (min, max) => Math.floor(Math.random() * (max - min + 1)) + min,
     randArr: (arr) => arr[Math.floor(Math.random() * arr.length)],
     clamp: (num, min, max) => Math.min(Math.max(num, min), max),
+    clone: (value) => JSON.parse(JSON.stringify(value)),
     formatMoney: (val) => val >= 10000 ? (val/10000).toFixed(2) + "万" : Math.floor(val) + "元",
-    getStatName: (k) => k==='money'?'公款':(k==='savings'?'存款':(k==='rep'?'声望':(k==='iq'?'智商':(k==='eq'?'情商':(k==='health'?'精力':(k==='mood'?'愉悦':k))))))
+    getStatName: (k) => k==='money'?'公款':(k==='savings'?'存款':(k==='rep'?'声望':(k==='iq'?'智商':(k==='eq'?'情商':(k==='health'?'精力':(k==='mood'?'愉悦':k)))))),
+    formatEffects(effects) {
+        return Object.entries(effects).map(([key, value]) => {
+            const label = this.getStatName(key);
+            const displayValue = value > 0 ? `+${value}` : value;
+            return `\n${label} ${displayValue}`;
+        }).join('');
+    }
 };
 // ==================== 事件管理器 ====================
 const EventManager = {
@@ -45,16 +67,9 @@ const EventManager = {
                 if(k !== 'money') game.changeStat(k, evt.effect[k]);
             }
 
-            let effectText = "";
-            for (let k in evt.effect) {
-                let name = UTILS.getStatName(k);
-                let val = evt.effect[k] > 0 ? `+${evt.effect[k]}` : evt.effect[k];
-                effectText += `\n${name} ${val}`;
-            }
-
             game.showModal(
                 "📢 突发消息", 
-                `${evt.desc}\n----------------${effectText}`, 
+                `${evt.desc}\n----------------${UTILS.formatEffects(evt.effect)}`, 
                 [{
                     txt: "知道了",
                     cb: () => {
@@ -74,16 +89,10 @@ const EventManager = {
                     game.closeModal();
                     // 结算效果
                     for(let k in c.effect) game.changeStat(k, c.effect[k]);
-                    let effectText = "";
-                    for (let k in c.effect) {
-                        let name = UTILS.getStatName(k);
-                        let val = c.effect[k] > 0 ? `+${c.effect[k]}` : c.effect[k];
-                        effectText += `\n${name} ${val}`;
-                    }
                     // 显示结果弹窗，结果弹窗关闭后，继续处理队列
                     game.showModal(
                         "事件结果", 
-                        `${c.res}\n----------------${effectText}`, 
+                        `${c.res}\n----------------${UTILS.formatEffects(c.effect)}`, 
                         [{
                             txt: "确定", 
                             cb: () => {
@@ -109,6 +118,7 @@ const game = {
     startGame() {
         document.getElementById('start-screen').style.display = 'none';
         document.getElementById('app').style.display = 'grid';
+        if (this.restorePersistedGame()) return;
         this.init();
         this.showIntro();
     },
@@ -135,7 +145,7 @@ const game = {
 
             turn: { year: 1, quarter: 1 },
 
-            limits: { leisure: 2 },
+            limits: { leisure: GAME_CONFIG.leisureLimitPerQuarter },
 
             exhibitions: [],
             flags: {
@@ -153,7 +163,8 @@ const game = {
                 // 【新增】作死计数器
                 adminAfterExhibitStreak: 0, 
                 // 【新增】本季度是否已经干过展览活了
-                hasDoneExhibitTaskThisQuarter: false 
+                hasDoneExhibitTaskThisQuarter: false,
+                hasRestedAtHomeThisQuarter: false
             },
 
             university: {
@@ -172,6 +183,14 @@ const game = {
                 courseStartYear: {},
 
                 selectedThisQuarter: false
+            },
+
+            settings: {
+                theme: 'brutal'
+            },
+
+            meta: {
+                introCompleted: false
             }
         };
 
@@ -180,6 +199,113 @@ const game = {
         this.updateUI();
         this.generateAdminTask();
         this.renderExhibitPanel();
+    },
+
+    hasPersistedProgress() {
+        return Boolean(this.readPersistedGame());
+    },
+
+    readPersistedGame() {
+        try {
+            const raw = localStorage.getItem(GAME_CONFIG.storageKey);
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            if (!parsed || !parsed.state) return null;
+            return parsed;
+        } catch (error) {
+            console.warn('读取自动存档失败', error);
+            return null;
+        }
+    },
+
+    normalizeLoadedState(rawState) {
+        const state = UTILS.clone(rawState);
+        if (!state.limits) state.limits = {};
+        if (typeof state.limits.leisure !== 'number') {
+            state.limits.leisure = GAME_CONFIG.leisureLimitPerQuarter;
+        }
+
+        if (!state.flags) state.flags = {};
+        if (typeof state.flags.hasDoneExhibitTaskThisQuarter !== 'boolean') state.flags.hasDoneExhibitTaskThisQuarter = false;
+        if (typeof state.flags.hasRestedAtHomeThisQuarter !== 'boolean') state.flags.hasRestedAtHomeThisQuarter = false;
+        if (typeof state.flags.adminAfterExhibitStreak !== 'number') state.flags.adminAfterExhibitStreak = 0;
+
+        if (!state.settings) state.settings = {};
+        if (!state.settings.theme) state.settings.theme = 'brutal';
+
+        if (!state.meta) state.meta = {};
+        if (typeof state.meta.introCompleted !== 'boolean') {
+            state.meta.introCompleted = Boolean(state.player && state.player.name);
+        }
+
+        return state;
+    },
+
+    applyThemeFromState() {
+        const useBento = this.state && this.state.settings && this.state.settings.theme === 'bento';
+        document.body.classList.toggle('theme-bento', useBento);
+    },
+
+    persistProgress() {
+        if (!this.state) return;
+        try {
+            localStorage.setItem(GAME_CONFIG.storageKey, JSON.stringify({
+                version: 2,
+                state: this.state,
+                history: this.history
+            }));
+        } catch (error) {
+            console.warn('写入自动存档失败', error);
+        }
+    },
+
+    clearPersistedProgress() {
+        try {
+            localStorage.removeItem(GAME_CONFIG.storageKey);
+        } catch (error) {
+            console.warn('清理自动存档失败', error);
+        }
+    },
+
+    resetProgress() {
+        this.clearPersistedProgress();
+        location.reload();
+    },
+
+    updateStartScreen() {
+        const startBtn = document.getElementById('btn-start');
+        const startTip = document.getElementById('start-tip');
+        if (!startBtn || !startTip) return;
+
+        if (this.hasPersistedProgress()) {
+            startBtn.innerText = '继续游戏';
+            startTip.innerText = '检测到本地自动存档，点击后会恢复上次进度。';
+            return;
+        }
+
+        startBtn.innerText = '开始游戏';
+        startTip.innerText = '纯前端单机游戏，直接打开 index.html 即可游玩。';
+    },
+
+    restorePersistedGame() {
+        const saved = this.readPersistedGame();
+        if (!saved) return false;
+
+        this.state = this.normalizeLoadedState(saved.state);
+        this.history = saved.history ? this.normalizeLoadedState(saved.history) : UTILS.clone(this.state);
+        this.applyThemeFromState();
+        this.closeModal();
+        this.closeOnboarding();
+        this.updateUI();
+        this.renderAdminTaskPanel();
+        this.renderExhibitPanel();
+        if (!this.state.meta.introCompleted) {
+            this.showIntro();
+            return true;
+        }
+
+        this.log("system", "💾 已恢复本地自动存档。");
+        return true;
     },
 
     switchRightTab(tabName) {
@@ -197,17 +323,36 @@ const game = {
         this.state.flags.adminTaskDone = false;
         const task = ADMIN_TASKS[Math.floor(Math.random() * ADMIN_TASKS.length)];
         this.state.flags.currentAdminTask = task;
+        this.renderAdminTaskPanel();
+        this.switchRightTab('admin');
+        this.persistProgress();
+    },
+
+    renderAdminTaskPanel() {
+        const task = this.state && this.state.flags ? this.state.flags.currentAdminTask : null;
         const chatBox = document.getElementById('admin-chat-box');
         if (chatBox) {
             chatBox.innerHTML = '';
-            this.addChatMsg('leader', task.text);
+            if (task) this.addChatMsg('leader', task.text);
+            if (this.state.flags.adminTaskDone) {
+                if (this.state.flags.isPanelLocked) {
+                    if (task) this.addChatMsg('system', `❌ ${task.failDesc}`);
+                    this.addChatMsg('system', '🔒 本季度展览工作面板已被锁定！');
+                } else {
+                    this.addChatMsg('system', '✅ 本季度行政任务已处理，可以继续推进展览工作。');
+                }
+            }
         }
+
         const btn = document.querySelector('.dice-btn');
-        if (btn) {
-            btn.disabled = false;
-            btn.innerText = '🎲 尝试甩锅 (Roll)';
+        if (!btn) return;
+        btn.disabled = this.state.flags.adminTaskDone;
+        if (!this.state.flags.adminTaskDone) {
+            btn.innerText = GAME_CONFIG.defaultAdminButtonText;
+            return;
         }
-        this.switchRightTab('admin');
+
+        btn.innerText = this.state.flags.isPanelLocked ? '🎲 本季度已接活' : '🎲 本季度已处理';
     },
 
     addChatMsg(role, text) {
@@ -227,16 +372,15 @@ const game = {
         if (!btn) return;
         btn.disabled = true;
         let rollCount = 0;
-        const maxRolls = 10;
         const interval = setInterval(() => {
             const tempRoll = Math.floor(Math.random() * 6) + 1;
             btn.innerText = `🎲 判定中... ${tempRoll}`;
             rollCount++;
-            if (rollCount >= maxRolls) {
+            if (rollCount >= GAME_CONFIG.adminDiceMaxRolls) {
                 clearInterval(interval);
                 this.resolveDiceResult();
             }
-        }, 100);
+        }, GAME_CONFIG.adminDiceIntervalMs);
     },
 
     resolveDiceResult() {
@@ -250,18 +394,18 @@ const game = {
         if (this.state.flags.hasDoneExhibitTaskThisQuarter) {
             if (this.state.flags.adminAfterExhibitStreak === undefined) this.state.flags.adminAfterExhibitStreak = 0;
             this.state.flags.adminAfterExhibitStreak++;
-            // 可以在控制台偷偷打印一下，方便调试
-            console.log("作死计数:", this.state.flags.adminAfterExhibitStreak);
         } else {
             // 如果很乖，是先回消息再干活的，计数清零
             this.state.flags.adminAfterExhibitStreak = 0;
         }
         const btn = document.querySelector('.dice-btn');
-        if (finalRoll >= 3) {
+        this.persistProgress();
+        if (finalRoll >= GAME_CONFIG.adminDiceSuccessThreshold) {
             this.addChatMsg('player', `（掷出 ${finalRoll}）领导，这事儿我不熟啊，要不让隔壁小李去？他擅长这个。`);
             setTimeout(() => {
                 this.addChatMsg('leader', '行吧行吧，那你忙你的展览去。');
                 this.log('success', '🎲 甩锅成功！你避开了繁琐的行政任务。');
+                this.persistProgress();
             }, 800);
             if (btn) btn.innerText = `🎲 判定 ${finalRoll} (成功)`;
             return;
@@ -273,19 +417,22 @@ const game = {
             this.addChatMsg('system', '🔒 本季度展览工作面板已被锁定！');
             this.log('danger', `🎲 甩锅失败 (点数${finalRoll})，被迫处理行政任务，展览进度停滞。`);
             this.renderExhibitPanel();
+            this.persistProgress();
         }, 800);
         if (btn) btn.innerText = `🎲 判定 ${finalRoll} (失败)`;
     },
 
-    saveState() { this.history = JSON.parse(JSON.stringify(this.state)); },
+    saveState() { this.history = UTILS.clone(this.state); },
 
     markAction() { this.state.flags.didActionThisQuarter = true; },
 
     undoQuarter() {
         if (!this.history) return;
-        this.state = JSON.parse(JSON.stringify(this.history));
+        this.state = UTILS.clone(this.history);
+        this.applyThemeFromState();
         this.log("system", "↺ 时光倒流...回到了季度初，一切重新开始。");
         this.updateUI();
+        this.renderAdminTaskPanel();
         this.renderExhibitPanel();
     },
 
@@ -355,10 +502,11 @@ nextQuarter() {
                 return;
             }
 
-            this.state.limits.leisure = 2;
+            this.state.limits.leisure = GAME_CONFIG.leisureLimitPerQuarter;
             this.state.flags.hasAppliedExhibitThisQuarter = false;
             this.state.flags.hasStudiedThisQuarter = false;
             this.state.flags.didActionThisQuarter = false;
+            this.state.flags.hasRestedAtHomeThisQuarter = false;
             
             // 生成新任务
             this.generateAdminTask(); 
@@ -379,7 +527,7 @@ nextQuarter() {
                 this.log("danger", "被领导针对了：因不懂“规矩”，本季度展览工作被暂停。");
             }
 
-            this.checkSurvival();
+            if (this.checkSurvival()) return;
             this.log("turn", `📅 Y${this.state.turn.year} - Q${this.state.turn.quarter}`);
             this.updateUI();
             this.renderExhibitPanel();
@@ -457,15 +605,11 @@ nextQuarter() {
             return;
         }
         // ====== 修复代码结束 ======
-        let effectText = "";
         for (let k in effects) {
             this.changeStat(k, effects[k]);
-            let name = UTILS.getStatName(k);
-            let val = effects[k] > 0 ? `+${effects[k]}` : effects[k];
-            effectText += `\n${name} ${val}`;
         }
         // true 表示这是通知类弹窗，允许点击背景关闭
-        this.showModal("事件结果", `${msg}\n----------------${effectText}`, [{txt:"知道了", cb:()=>this.closeModal()}], true);
+        this.showModal("事件结果", `${msg}\n----------------${UTILS.formatEffects(effects)}`, [{txt:"知道了", cb:()=>this.closeModal()}], true);
         this.updateUI();
     },
     // [新增] 检查某个展览的某阶段是否解锁
@@ -728,7 +872,7 @@ nextQuarter() {
         document.getElementById('bar-health').style.width = p.health+"%";
         document.getElementById('txt-mood').innerText = p.mood;
         document.getElementById('bar-mood').style.width = p.mood+"%";
-        document.getElementById('limit-leisure').innerText = `${this.state.limits.leisure}/2`;
+        document.getElementById('limit-leisure').innerText = `${this.state.limits.leisure}/${GAME_CONFIG.leisureLimitPerQuarter}`;
         document.getElementById('ui-year').innerText = this.state.turn.year;
         document.getElementById('ui-quarter').innerText = this.state.turn.quarter;
         document.getElementById('btn-promote').disabled = !(this.state.turn.quarter === 4 && !this.state.flags.promotedThisYear && p.titleIdx < 4);
@@ -737,11 +881,11 @@ nextQuarter() {
         const degreeDesc = document.getElementById('degree-desc');
         if (degreeBtn && degreeTitle && degreeDesc) {
             if (p.edu === "本科") {
-                degreeTitle.innerText = "申请在职硕士 (50000元)";
+                degreeTitle.innerText = `申请在职硕士 (${UTILS.formatMoney(GAME_CONFIG.degreeTuition)})`;
                 degreeDesc.innerText = "晋升学历 (本科可申请)";
                 degreeBtn.disabled = false;
             } else if (p.edu === "硕士") {
-                degreeTitle.innerText = "申请在职博士 (50000元)";
+                degreeTitle.innerText = `申请在职博士 (${UTILS.formatMoney(GAME_CONFIG.degreeTuition)})`;
                 degreeDesc.innerText = "晋升学历 (需硕士学位)";
                 degreeBtn.disabled = false;
             } else {
@@ -762,28 +906,48 @@ nextQuarter() {
             document.getElementById('research-msg').innerText = this.state.flags.researchApplied ? "等待评审" : "窗口关闭";
             document.getElementById('research-msg').style.color = "var(--text-sub)";
         }
-        // [新增] 检测家庭解锁状态
+        this.renderHomePanel();
+        this.renderUniversityUI();
+        this.persistProgress();
+    },
+    renderHomePanel() {
+        const unlocked = this.state.player.savings >= GAME_CONFIG.homeUnlockSavings;
         const homeTab = document.getElementById('tab-home');
-        if (homeTab) {
-            if (this.state.player.savings >= 10000000) {
-                homeTab.classList.remove('locked');
-                homeTab.innerText = "🏠 家庭"; // 去掉锁图标
-                const homeView = document.getElementById('view-home');
-                const placeholder = homeView && homeView.querySelector('.scene-placeholder');
-                if(placeholder) {
-                    placeholder.innerHTML = `<div class='scene-icon'>🏠</div><h3>温馨小窝</h3><p>欢迎回家，主人。</p>`;
-                }
-            }
+        const placeholder = document.querySelector('#view-home .scene-placeholder');
+        const homeContent = document.getElementById('home-content');
+        if (homeTab) homeTab.classList.toggle('locked', !unlocked);
+        if (!placeholder || !homeContent) return;
+
+        placeholder.classList.toggle('hidden', unlocked);
+        homeContent.classList.toggle('hidden', !unlocked);
+
+        if (!unlocked) {
+            placeholder.innerHTML = `
+                <div class="scene-icon">🔒</div>
+                <h3>温馨小窝</h3>
+                <p>这里是你心灵的港湾。</p>
+                <p style="color:var(--danger); margin-top:10px">解锁条件：个人存款达到 ${UTILS.formatMoney(GAME_CONFIG.homeUnlockSavings)}</p>
+            `;
+            return;
         }
 
-        this.renderUniversityUI();
+        const rested = this.state.flags.hasRestedAtHomeThisQuarter;
+        const effects = GAME_CONFIG.homeRestEffects;
+        homeContent.innerHTML = `
+            <div class="home-panel">
+                <div class="home-panel-title">温馨小窝</div>
+                <div class="home-panel-copy">回到家之后，工作群终于安静了。每个季度都可以在这里彻底喘一口气。</div>
+                <div class="home-rest-summary">每季度可休息一次：精力 +${effects.health}，愉悦 +${effects.mood}</div>
+                <button class="primary" onclick="game.actionHomeRest()" ${rested ? 'disabled' : ''}>${rested ? '本季度已回家休息' : '回家休息'}</button>
+            </div>
+        `;
     },
     // [新增] 切换中间栏场景
     switchScene(sceneName) {
         // 1. 检查家庭解锁条件
         if (sceneName === 'home') {
-            if (this.state.player.savings < 10000000) {
-                this.showResult("未解锁", "买房首付还没攒够呢！(需要存款≥1000万)");
+            if (this.state.player.savings < GAME_CONFIG.homeUnlockSavings) {
+                this.showResult("未解锁", `买房首付还没攒够呢！(需要存款≥${UTILS.formatMoney(GAME_CONFIG.homeUnlockSavings)})`);
                 return;
             }
         }
@@ -805,7 +969,7 @@ nextQuarter() {
                 return;
             }
 
-            if (this.state.player.savings < 5000) {
+            if (this.state.player.savings < GAME_CONFIG.studyCourseCost) {
                 this.showResult("存款不足", "学费不够，还是先去搬砖吧。");
                 return;
             }
@@ -836,7 +1000,7 @@ nextQuarter() {
                 txt: course.title,
                 cb: () => {
                     this.closeModal();
-                    this.changeStat('savings', -5000);
+                    this.changeStat('savings', -GAME_CONFIG.studyCourseCost);
                     this.changeStat('health', -10);
                     this.changeStat('mood', -10);
                     this.state.flags.hasStudiedThisQuarter = true;
@@ -849,7 +1013,7 @@ nextQuarter() {
             return;
         } else if (type === 'degree') {
             const p = this.state.player;
-            const cost = 50000;
+            const cost = GAME_CONFIG.degreeTuition;
             if (p.edu === "本科") {
                 if (p.savings < cost) {
                     this.showResult("存款不足", "学费不够，先攒点钱吧。");
@@ -923,7 +1087,9 @@ nextQuarter() {
                         this.state.player.name = finalName;
                         this.state.player.gender = gender;
                         const useBento = btnBento && btnBento.classList.contains('active');
-                        document.body.classList.toggle('theme-bento', useBento);
+                        this.state.settings.theme = useBento ? 'bento' : 'brutal';
+                        this.state.meta.introCompleted = true;
+                        this.applyThemeFromState();
                         this.closeModal();
                         this.updateUI();
                         this.showGuide();
@@ -1016,7 +1182,7 @@ nextQuarter() {
                 <p>在这里攻读更高学位，提升基础智商上限。</p>
                 <div style="margin-top:20px; width:100%">
                     <button class="primary" id="btn-study-course" style="width:100%; padding:15px; margin-bottom:10px" onclick="game.actionStudy('course')">
-                        参加进修课程 (5000元)<br>
+                        参加进修课程 (${UTILS.formatMoney(GAME_CONFIG.studyCourseCost)})<br>
                         <span style="font-size:0.8em; opacity:0.8">-精力10 -愉悦10</span>
                     </button>
                     <button id="btn-apply-program" class="primary" style="width:100%; padding:15px;" ${isQ2 ? "" : "disabled"}>
@@ -1100,8 +1266,8 @@ nextQuarter() {
             return;
         }
 
-        if (this.state.player.iq <= 10 || this.state.player.eq <= 10 || this.state.player.savings <= 100000) {
-            this.showResult("条件不足", "申请在读硕士/博士需智商与情商 > 10，且存款 > 100,000。");
+        if (this.state.player.iq <= 10 || this.state.player.eq <= 10 || this.state.player.savings < GAME_CONFIG.programApplyMinSavings) {
+            this.showResult("条件不足", `申请在读硕士/博士需智商与情商 > 10，且存款 ≥ ${UTILS.formatMoney(GAME_CONFIG.programApplyMinSavings)}。`);
             return;
         }
 
@@ -1468,6 +1634,22 @@ nextQuarter() {
             c.appendChild(overlay);
         }
     },
+    actionHomeRest() {
+        if (this.state.player.savings < GAME_CONFIG.homeUnlockSavings) {
+            this.showResult("未解锁", `需要个人存款达到 ${UTILS.formatMoney(GAME_CONFIG.homeUnlockSavings)} 才能回家。`);
+            return;
+        }
+
+        if (this.state.flags.hasRestedAtHomeThisQuarter) {
+            this.showResult("已经休息过了", "本季度已经在家缓过一口气，下季度再回来躺平吧。");
+            return;
+        }
+
+        this.markAction();
+        this.state.flags.hasRestedAtHomeThisQuarter = true;
+        this.showResult("你把手机调成静音，在家里彻底放松了一晚。", GAME_CONFIG.homeRestEffects);
+        this.log("success", "🏠 你在家休息了一晚，状态恢复了不少。");
+    },
     // [修改] 升级后的摸鱼逻辑：随机抽取剧情事件
     actionLeisure(type) {
         this.markAction();
@@ -1603,6 +1785,7 @@ actionPromote() {
                 "结局·劳碌命",
                 "你把几乎所有时间都留给了博物馆。\n展览、会议、报告与突发事件不断叠加，责任从未减轻。\n在长期的透支中，你最终倒在了熟悉的工作岗位上。\n博物馆仍在运转，而你的名字只留在了内部文件与回忆里。\n工作之余也要注意身体\n身体，才是革命的本钱。"
             );
+            return true;
         }
 
         if (this.state.player.mood <= 0) {
@@ -1610,7 +1793,10 @@ actionPromote() {
                 "结局·不如回家",
                 "繁忙而重复的工作逐渐消磨了你的热情。\n在长期的压力下，你感到情绪低落，开始怀疑继续坚持的意义。\n最终，你选择辞去工作，离开这座熟悉的博物馆。\n或许前路并不清晰，但至少此刻，你决定先回家休息。\n有时候，退出也是一种自我保护。"
             );
+            return true;
         }
+
+        return false;
     },
 
     log(type, msg) {
@@ -1684,12 +1870,12 @@ showGuide() {
             {
                 selector: "#tab-home",
                 scene: "office", 
-                text: "🏠 家庭系统\n（这部分还没来得及优化，大家可以忽略...）\n当你的存款超过1000万时，这里会自动解锁。"
+                text: `🏠 家庭系统\n当你的存款达到 ${UTILS.formatMoney(GAME_CONFIG.homeUnlockSavings)} 时就会解锁。\n解锁后每个季度都能回家休息一次，稳定恢复精力和愉悦。`
             },
             {
                 selector: "#btn-end-quarter",
                 scene: "office",
-                text: "🌙 结束季度\n当本季度没有体力或操作次数后，点击这里进入下一季度。\n工资会在此时发放，同时触发随机事件。"
+                text: "🌙 结束季度\n当本季度没有体力或操作次数后，点击这里进入下一季度。\n工资会在此时发放，同时触发随机事件，当前进度也会自动存档。"
             }
         ];
         // 初始化引导状态
@@ -1836,5 +2022,8 @@ showGuide() {
         document.getElementById('modal-overlay').classList.add('hidden'); 
     },
 
-    endGame(t, r) { this.showModal(t, r, [{txt:"重新开始", cb:()=>location.reload()}]); }
+    endGame(t, r) {
+        this.clearPersistedProgress();
+        this.showModal(t, r, [{txt:"重新开始", cb:()=>location.reload()}]);
+    }
 };

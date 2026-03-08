@@ -25,4 +25,12 @@ function setupSettingsMenu() {
     });
 }
 
-document.addEventListener('DOMContentLoaded', setupSettingsMenu);
+function setupStartScreen() {
+    if (!window.game || typeof game.updateStartScreen !== 'function') return;
+    game.updateStartScreen();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    setupSettingsMenu();
+    setupStartScreen();
+});

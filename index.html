@@ -11,7 +11,8 @@
 <div id="start-screen">
     <div class="pixel-museum">🏛️</div>
     <div class="game-title">博物馆生存指南</div>
-    <button class="btn-start" onclick="startGame()">开始游戏</button>
+    <button class="btn-start" id="btn-start" onclick="startGame()">开始游戏</button>
+    <div class="start-tip" id="start-tip">纯前端单机游戏，直接打开 index.html 即可游玩。</div>
 </div>
 
 <div id="app" class="game-container">
@@ -20,7 +21,7 @@
             <button class="settings-btn" id="settings-btn" aria-haspopup="true" aria-expanded="false">⚙️</button>
             <div class="settings-menu" id="settings-menu" role="menu">
             <div class="menu-item" onclick="game.undoQuarter()">↺ 返回上一季度</div>
-            <div class="menu-item" onclick="location.reload()">☠ 重置所有数据</div>
+            <div class="menu-item" onclick="game.resetProgress()">☠ 重置所有数据</div>
             </div>
         </div>
 
@@ -141,7 +142,7 @@
             <p style="color:var(--danger); margin-top:10px">解锁条件：个人存款达到 100,000 元</p>
         </div>
         <div id="home-content" class="hidden" style="width:100%">
-            <p>欢迎回家！这里可以恢复大量心情。</p>
+            <p>欢迎回家。</p>
         </div>
     </div>
 
